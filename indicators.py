@@ -106,4 +106,6 @@ class Indicators:
         if drop_ohl:
             self.data.drop(columns=['Open', 'High', 'Low'], inplace=True)
 
+        # pd.set_option('display.max_rows', None)
+        # print(self.data)
         return self.data

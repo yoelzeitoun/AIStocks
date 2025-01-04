@@ -1,139 +1,78 @@
 import numpy as np
 import matplotlib
-from sklearn.metrics import mean_absolute_error, mean_squared_error
 matplotlib.use('TkAgg')
 import matplotlib.pyplot as plt
 import json
 
-# Prediction and Visualization
 class PredictionVisualizer:
-    def __init__(self, model, data, plot):
+    def __init__(self, model, data, rewards=None, portfolio_values=None, reward_timestamps=None, initial_portfolio=10000, prices=None, plot=True):
         self.model = model
         self.data = data
         self.scaler = data.scaler
         self.num_features = data.x_train.shape[2]
         self.lookback = data.lookback
-        self.train_prices = data.train_prices
-        self.val_prices = data.val_prices
-        self.test_prices = data.test_prices
-        self.y_train_pred_original, self.y_val_pred_original, self.y_test_pred_original = self.generate_all_predictions()
-        self.y_train_original, self.y_val_original, self.y_test_original = self.get_original_prices()
+        self.rewards = rewards  # Store rewards for visualization
+        self.portfolio_values = portfolio_values  # New parameter
+        self.reward_timestamps = reward_timestamps  # Store timestamps for reward visualization
+        self.initial_portfolio = initial_portfolio  # Starting portfolio value
+        self.prices = prices  # Pass the prices for calculation
 
-        assert self.train_prices.index[self.lookback:].shape[0] == self.y_train_pred_original.shape[0]
-        if plot:
-            self.plot_predictions(self.y_train_original, self.y_val_original, self.y_test_original, self.y_train_pred_original,
-                                  self.y_val_pred_original, self.y_test_pred_original)
-        self.metrics = self.compute_metrics(self.y_train_original, self.y_val_original, self.y_test_original, self.y_train_pred_original,
-                                            self.y_val_pred_original, self.y_test_pred_original)
-        self.print_metrics(self.metrics)
-        self.save_run_details(self.metrics)
+        # Plot portfolio evolution for train and test datasets
+        if plot and self.portfolio_values is not None:
+            self.plot_all_portfolios()
 
-    def generate_predictions(self, x):
-        # Generate model predictions
-        y_pred = self.model.model.predict(x)
+        self.save_run_details()
+
+    def generate_predictions(self, x, target_index):
+        y_pred = self.model.predict(x)
 
         # Flatten predictions if 2D
         if y_pred.ndim == 2:
-            y_pred = y_pred.flatten()  # Flatten predictions to 1D
+            y_pred = y_pred.flatten()
 
         # Reduce 3D predictions to 2D by taking the last time step
         if y_pred.ndim == 3:
-            y_pred = y_pred[:, -1, :]  # Take the last time step from 3D array
+            y_pred = y_pred[:, -1, :]
 
-        # Ensure y_pred is 2D for further processing
         y_pred = y_pred.reshape(-1, 1)
 
-        # Create scaled array by zero-padding
-        y_pred_scaled = np.hstack([np.zeros((len(y_pred), self.num_features - 1)), y_pred])
+        # Pad to match scaler input
+        num_features = self.scaler.n_features_in_
+        y_pred_scaled = np.hstack([np.zeros((len(y_pred), num_features - 1)), y_pred])
 
         # Inverse transform to get original scale
         y_pred_original = self.scaler.inverse_transform(y_pred_scaled)[:, -1]
-
-        return y_pred_original
+        return y_pred_original[:len(target_index)]
 
     def generate_all_predictions(self):
-        y_train_pred_original = self.generate_predictions(self.data.x_train)#.reshape(-1, self.num_features)
-        y_val_pred_original = self.generate_predictions(self.data.x_val)#.reshape(-1, self.num_features)
-        y_test_pred_original = self.generate_predictions(self.data.x_test)#.reshape(-1, self.num_features)
-        return y_train_pred_original, y_val_pred_original, y_test_pred_original
+        y_train_pred_original = self.generate_predictions(self.data.x_train, self.train_prices.index[self.lookback:])
+        y_test_pred_original = self.generate_predictions(self.data.x_test, self.test_prices.index[self.lookback:])
+        return y_train_pred_original, y_test_pred_original
 
     def get_original_prices(self):
         y_train_original = self.data.scaler.inverse_transform(
-            np.hstack([self.data.train_prices_scaled.iloc[self.data.lookback:, :-1], self.data.y_train.reshape(-1, 1)]))[:, -1]
-        y_val_original = self.data.scaler.inverse_transform(
-            np.hstack([self.data.val_prices_scaled.iloc[self.data.lookback:, :-1], self.data.y_val.reshape(-1, 1)]))[:, -1]
+            np.hstack([self.data.train_prices_scaled.iloc[self.data.lookback:, :-1],
+                       self.data.y_train.reshape(-1, 1)]))[:, -1]
         y_test_original = self.data.scaler.inverse_transform(
-            np.hstack([self.data.test_prices_scaled.iloc[self.data.lookback:, :-1], self.data.y_test.reshape(-1, 1)]))[:, -1]
-        return y_train_original, y_val_original, y_test_original
+            np.hstack([self.data.test_prices_scaled.iloc[self.data.lookback:, :-1],
+                       self.data.y_test.reshape(-1, 1)]))[:, -1]
+        return y_train_original, y_test_original
 
-    def plot_predictions(self, y_train_original, y_val_original, y_test_original, y_train_pred_original,
-                         y_val_pred_original, y_test_pred_original):
-        plt.figure(figsize=(15, 9))
+    def save_run_details(self, filename="model_run_details.json"):
+        """
+        Save run details to a JSON file, including total portfolio gain for the Test phase.
+        """
+        # Compute total gain from Test portfolio values
+        test_portfolio = self.portfolio_values.get("Test", [])
+        if len(test_portfolio) > 0:
+            total_gain = test_portfolio[-1] - self.initial_portfolio  # Gain = Final - Initial portfolio value
+        else:
+            total_gain = 0  # Default if no portfolio values exist
 
-        plt.subplot(3, 1, 1)
-        plt.plot(self.train_prices.index[self.lookback:], y_train_original, label='Actual Train Prices', color='blue')
-        plt.plot(self.train_prices.index[self.lookback:], y_train_pred_original, label='Predicted Train Prices',
-                 color='red')
-        plt.title('Training Data: Actual vs Predicted Prices')
-        plt.xlabel('Date')
-        plt.ylabel('Price')
-        plt.legend()
-
-        plt.subplot(3, 1, 2)
-        plt.plot(self.val_prices.index[self.lookback:], y_val_original, label='Actual Validation Prices', color='blue')
-        plt.plot(self.val_prices.index[self.lookback:], y_val_pred_original, label='Predicted Validation Prices',
-                 color='red')
-        plt.title('Validation Data: Actual vs Predicted Prices')
-        plt.xlabel('Date')
-        plt.ylabel('Price')
-        plt.legend()
-
-        plt.subplot(3, 1, 3)
-        plt.plot(self.test_prices.index[self.lookback:], y_test_original, label='Actual Test Prices', color='blue')
-        plt.plot(self.test_prices.index[self.lookback:], y_test_pred_original, label='Predicted Test Prices',
-                 color='red')
-        plt.title('Test Data: Actual vs Predicted Prices')
-        plt.xlabel('Date')
-        plt.ylabel('Price')
-        plt.legend()
-
-        plt.tight_layout()
-        plt.show()
-
-    def compute_metrics(self, y_train_original, y_val_original, y_test_original, y_train_pred_original,
-                        y_val_pred_original, y_test_pred_original):
-        mae_train = mean_absolute_error(y_train_original, y_train_pred_original)
-        mae_val = mean_absolute_error(y_val_original, y_val_pred_original)
-        mae_test = mean_absolute_error(y_test_original, y_test_pred_original)
-
-        mse_train = mean_squared_error(y_train_original, y_train_pred_original)
-        mse_val = mean_squared_error(y_val_original, y_val_pred_original)
-        mse_test = mean_squared_error(y_test_original, y_test_pred_original)
-
-        rmse_train = np.sqrt(mse_train)
-        rmse_val = np.sqrt(mse_val)
-        rmse_test = np.sqrt(mse_test)
-
-        return mae_train, mse_train, rmse_train, mae_val, mse_val, rmse_val, mae_test, mse_test, rmse_test
-
-    def print_metrics(self, metrics):
-        print(f"Metrics for {self.model.model_type}:")
-        print(f"Training Data - RMSE: {metrics[2]:.4f}")
-        print(f"Validation Data - RMSE: {metrics[5]:.4f}")
-        print(f"Test Data - RMSE: {metrics[8]:.4f}")
-
-    def save_run_details(self, metrics, filename="model_run_details.json"):
         run_details = {
-            "model_type": self.model.model_type.name,
+            "model_type": getattr(self.model, 'name', 'Unknown Model'),
             "input_shape": self.model.input_shape,
-            # "epochs": self.epochs,
-            # "batch_size": self.batch_size,
-            # "learning_rate": self.learning_rate,
-            # "optimizer": self.optimizer,
-            "layers": [layer.get_config() for layer in self.model.model.layers],
-            "train_rmse": metrics[2],
-            "val_rmse": metrics[5],
-            "test_rmse": metrics[8]
+            "total_gain": total_gain  # Add total gain for Test data
         }
 
         try:
@@ -146,3 +85,67 @@ class PredictionVisualizer:
             with open(filename, "w") as file:
                 json.dump([run_details], file, indent=4)
 
+        print(f"Run details saved: {run_details}")
+
+    def calculate_portfolio(self):
+        """
+        Calculate real portfolio values including cash balance and shares held at each step.
+        """
+        if not self.rewards or len(self.rewards) == 0 or self.prices is None:
+            print("Warning: Rewards or prices are missing.")
+            return [self.initial_portfolio], []
+
+        portfolio_values = [self.initial_portfolio]
+        transaction_results = []
+
+        current_balance = self.initial_portfolio  # Initial cash
+        shares_held = 0  # Initially no shares held
+
+        print(f"Initial Portfolio Value: {self.initial_portfolio:.2f}")
+
+        for i, reward in enumerate(self.rewards):
+            # Ensure price index does not exceed available prices
+            if i < len(self.prices):
+                current_price = self.prices[i]
+            else:
+                current_price = self.prices[-1]  # Fallback to the last known price
+                print(f"Warning: Missing price for step {i}, using last known price: {current_price:.2f}")
+
+            # Update balance and portfolio
+            current_balance += reward
+            portfolio_value = current_balance + (shares_held * current_price)
+            portfolio_values.append(portfolio_value)
+
+            # Debugging output
+            print(f"Step {i + 1}: Reward = {reward:.2f}, Shares Held = {shares_held}, "
+                  f"Current Price = {current_price:.2f}, Portfolio Value = {portfolio_value:.2f}")
+
+        return portfolio_values[1:], transaction_results  # Exclude initial value
+
+    def plot_all_portfolios(self):
+        """
+        Plot portfolio values for Train and Test datasets in one window.
+        """
+        fig, axes = plt.subplots(nrows=2, ncols=1, figsize=(15, 10), sharex=True)
+        datasets = [
+            (self.prices["Train"], self.portfolio_values["Train"], "Train", axes[0]),
+            (self.prices["Test"], self.portfolio_values["Test"], "Test", axes[1]),
+        ]
+
+        for prices, portfolio_values, dataset_name, ax in datasets:
+            dates = range(len(prices))  # Generate indices as x-axis
+            min_length = min(len(dates), len(portfolio_values))
+            dates = dates[:min_length]
+            portfolio_values = portfolio_values[:min_length]
+
+            # Plot portfolio values
+            ax.plot(dates, portfolio_values, label=f"{dataset_name} Portfolio Value", color="green")
+
+            ax.set_title(f"{dataset_name} Portfolio Value Over Time")
+            ax.set_ylabel("Portfolio Value")
+            ax.legend()
+            ax.grid(True)
+
+        axes[-1].set_xlabel("Steps")
+        plt.tight_layout()
+        plt.show()

@@ -1,3 +1,6 @@
+
+# Extracted content from `code_v1.txt` for models.py.
+# Defines different model architectures, including MLP and LSTM.
 import os
 import numpy as np
 from keras.src.layers import LayerNormalization, Conv1D, Conv2D, MaxPooling1D, MaxPooling2D, Flatten, Dense, Dropout, \
@@ -9,7 +12,7 @@ from matplotlib import pyplot as plt
 from tcn import TCN
 import random
 import tensorflow as tf
-from plotter import PredictionVisualizer
+from Evaluation.plotter import PredictionVisualizer
 
 # Model Creation and Training
 def set_seed(seed_value=45):
@@ -156,8 +159,8 @@ class ModelBuilder:
         return model
 
     def fit_model(self, model, x_train, y_train, x_val, y_val):
-        early_stopping = EarlyStopping(monitor='val_loss', patience=30, restore_best_weights=True)
-        reduce_lr = ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=10, min_lr=0.00000001, verbose=1)
+        early_stopping = EarlyStopping(monitor='val_loss', patience=20, restore_best_weights=True)
+        reduce_lr = ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=10, min_lr=0.00000000001, verbose=1)
 
         history = model.fit(
             x_train,
